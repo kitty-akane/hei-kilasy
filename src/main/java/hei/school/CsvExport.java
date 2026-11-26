@@ -1,6 +1,9 @@
 package hei.school;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 
@@ -32,10 +35,16 @@ public class CsvExport {
         for (Map<String, Object> row : rows) {
             String note = "";
             if (row.get("raw_points") != null) {
-                double n = ((BigDecimal) row.get("raw_points")).doubleValue()
-                        / ((BigDecimal) row.get("max_points")).doubleValue() * 20;
-                n = Math.floor(n * 10) / 10;
-                note = String.valueOf(n).replace('.', ',');
+                BigDecimal raw = (BigDecimal) row.get("raw_points");
+                BigDecimal max = (BigDecimal) row.get("max_points");
+                LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
+                LocalDate submittedDay = ((java.sql.Timestamp) row.get("submitted_at")).toLocalDateTime().toLocalDate();
+                long lateDays = Math.max(0, ChronoUnit.DAYS.between(deadline, submittedDay));
+                long penaltyPercent = Math.min(lateDays * 10, 50);
+                BigDecimal n = raw.multiply(new BigDecimal("20"))
+                        .multiply(BigDecimal.valueOf(100 - penaltyPercent))
+                        .divide(max.multiply(new BigDecimal("100")), 1, RoundingMode.HALF_UP);
+                note = n.toString().replace('.', ',');
             }
             csv.append(row.get("reference")).append(';')
                     .append(row.get("full_name")).append(';')
