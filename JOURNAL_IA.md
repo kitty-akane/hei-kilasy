@@ -32,3 +32,28 @@ Vérification : 14.4 dans la réponse, le relevé et le CSV.
 ## Bilan
 - Fichiers modifiés : SubmissionController.java, GradeReport.java, CsvExport.java
 - Point d'attention : le calcul est dupliqué à 4 endroits, ce qui est fragile.
+
+## Changement : notification par SMS (C2)
+
+### Échange 4 — 23:12
+Demande : coller la consigne C2 et demander quoi faire.
+Proposition : une interface SmsSender et une implémentation LogSmsSender (SMS simulé
+dans les logs), appelée depuis SubmissionController dans un try/catch, après
+l'enregistrement de la note et l'envoi de l'email.
+Décision : gardé.
+Pourquoi : le critère 3 (changer de fournisseur sans toucher à la notation) impose une
+interface ; cela oblige à créer 2 petits fichiers, sans réorganiser le code existant.
+Vérification : note de la soumission 7 : ligne [SMS] dans les logs, email dans Mailpit.
+
+### Échange 5 — 23:27
+Demande : simuler une panne du SMS.
+Proposition : faire lever une exception à LogSmsSender, noter la soumission 12, puis
+restaurer le fichier.
+Décision : gardé.
+Pourquoi : c'est le test demandé par la consigne pour le critère 2.
+Vérification : réponse HTTP 200 avec grade 15.0 ; /submissions/12 et le relevé
+affichent 15.0 : la note reste publiée. Fichier restauré (grep "panne" vide).
+
+## Bilan C2
+- Fichiers modifiés : SubmissionController.java
+- Fichiers ajoutés : SmsSender.java, LogSmsSender.java
