@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS exercise
     title       VARCHAR(200) NOT NULL,
     description TEXT,
     max_points  NUMERIC(5, 2) NOT NULL DEFAULT 20,
-    deadline    DATE         NOT NULL,
+    deadline    DATE,
+    duration_minutes INTEGER,
     created_at  TIMESTAMP    NOT NULL DEFAULT now()
 );
 
@@ -38,5 +39,14 @@ CREATE TABLE IF NOT EXISTS submission
     raw_points   NUMERIC(5, 2),
     feedback     TEXT,
     graded_at    TIMESTAMP,
+    UNIQUE (exercise_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS exercise_start
+(
+    id          BIGSERIAL PRIMARY KEY,
+    exercise_id BIGINT    NOT NULL REFERENCES exercise (id),
+    student_id  BIGINT    NOT NULL REFERENCES student (id),
+    started_at  TIMESTAMP NOT NULL,
     UNIQUE (exercise_id, student_id)
 );

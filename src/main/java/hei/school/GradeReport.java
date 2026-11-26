@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
@@ -16,9 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-/**
- * Grade transcript of a student.
- */
+// Grade transcript of a student.
 @Component
 public class GradeReport {
 
@@ -33,22 +32,27 @@ public class GradeReport {
         Map<String, Object> student = students.get(0);
 
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT e.title, e.deadline, e.max_points, s.id AS submission_id, s.submitted_at, s.raw_points, s.feedback "
+                "SELECT e.title, e.deadline, e.max_points, e.duration_minutes, x.started_at, "
+                        + "s.id AS submission_id, s.submitted_at, s.raw_points, s.feedback "
                         + "FROM exercise e LEFT JOIN submission s ON s.exercise_id = e.id AND s.student_id = ? "
+                        + "LEFT JOIN exercise_start x ON x.exercise_id = e.id AND x.student_id = ? "
                         + "ORDER BY e.deadline",
-                studentId);
+                studentId, studentId);
 
         List<Map<String, Object>> lines = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO;
         int graded = 0;
         for (Map<String, Object> row : rows) {
             Map<String, Object> line = new LinkedHashMap<>();
-            LocalDate deadline = ((Date) row.get("deadline")).toLocalDate();
+            LocalDate deadline = row.get("deadline") == null ? null : ((Date) row.get("deadline")).toLocalDate();
             line.put("exercise", row.get("title"));
             line.put("deadline", deadline);
+            if (row.get("duration_minutes") != null) {
+                line.put("durationMinutes", row.get("duration_minutes"));
+            }
 
             if (row.get("submission_id") == null) {
-                if (deadline.isBefore(LocalDate.now())) {
+                if (deadline != null && deadline.isBefore(LocalDate.now())) {
                     line.put("status", "NON RENDU");
                 } else {
                     line.put("status", "À RENDRE");
@@ -57,14 +61,19 @@ public class GradeReport {
             } else {
                 LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
                 line.put("submittedAt", submittedAt);
-                line.put("late", submittedAt.toLocalDate().isAfter(deadline));
+                line.put("late", deadline != null && submittedAt.toLocalDate().isAfter(deadline));
+                if (row.get("duration_minutes") != null && row.get("started_at") != null) {
+                    LocalDateTime startedAt = ((Timestamp) row.get("started_at")).toLocalDateTime();
+                    double minutes = Duration.between(startedAt, submittedAt).getSeconds() / 60.0;
+                    line.put("timeUsedMinutes", Math.round(minutes * 10) / 10.0);
+                }
                 if (row.get("raw_points") == null) {
                     line.put("status", "EN ATTENTE DE CORRECTION");
                     line.put("grade", null);
                 } else {
                     BigDecimal raw = (BigDecimal) row.get("raw_points");
                     BigDecimal max = (BigDecimal) row.get("max_points");
-                    long lateDays = Math.max(0, ChronoUnit.DAYS.between(deadline, submittedAt.toLocalDate()));
+                    long lateDays = deadline == null ? 0 : Math.max(0, ChronoUnit.DAYS.between(deadline, submittedAt.toLocalDate()));
                     long penaltyPercent = Math.min(lateDays * 10, 50);
                     BigDecimal grade = raw.multiply(new BigDecimal("20"))
                             .multiply(BigDecimal.valueOf(100 - penaltyPercent))

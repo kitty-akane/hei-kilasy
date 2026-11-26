@@ -1,6 +1,8 @@
 package hei.school;
 
+import java.sql.Timestamp;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +31,9 @@ public class ExerciseController {
             e.setTitle(rs.getString("title"));
             e.setDescription(rs.getString("description"));
             e.setMaxPoints(rs.getDouble("max_points"));
-            e.setDeadline(rs.getDate("deadline").toLocalDate());
+            e.setDeadline(rs.getDate("deadline") == null ? null : rs.getDate("deadline").toLocalDate());
+            int duration = rs.getInt("duration_minutes");
+            e.setDurationMinutes(rs.wasNull() ? null : duration);
             return e;
         });
     }
@@ -43,7 +47,9 @@ public class ExerciseController {
             e.setTitle(rs.getString("title"));
             e.setDescription(rs.getString("description"));
             e.setMaxPoints(rs.getDouble("max_points"));
-            e.setDeadline(rs.getDate("deadline").toLocalDate());
+            e.setDeadline(rs.getDate("deadline") == null ? null : rs.getDate("deadline").toLocalDate());
+            int duration = rs.getInt("duration_minutes");
+            e.setDurationMinutes(rs.wasNull() ? null : duration);
             return e;
         }, id);
         if (found.isEmpty()) {
@@ -58,17 +64,27 @@ public class ExerciseController {
         if (title == null || title.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Le titre est obligatoire"));
         }
-        if (body.get("deadline") == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJ)"));
+        Integer durationMinutes = null;
+        if (body.get("durationMinutes") != null) {
+            durationMinutes = ((Number) body.get("durationMinutes")).intValue();
+            if (durationMinutes <= 0) {
+                return ResponseEntity.badRequest().body(Map.of("error", "La durée doit être positive (en minutes)"));
+            }
         }
-        LocalDate deadline;
-        try {
-            deadline = LocalDate.parse((String) body.get("deadline"));
-        } catch (Exception ex) {
-            return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJ)"));
+        if (body.get("deadline") == null && durationMinutes == null) {
+            return ResponseEntity.badRequest().body(Map.of("error",
+                    "L'échéance est obligatoire (format AAAA-MM-JJ), sauf pour un exercice minuté (durationMinutes)"));
         }
-        if (deadline.isBefore(LocalDate.now())) {
-            return ResponseEntity.badRequest().body(Map.of("error", "L'échéance doit être dans le futur"));
+        LocalDate deadline = null;
+        if (body.get("deadline") != null) {
+            try {
+                deadline = LocalDate.parse((String) body.get("deadline"));
+            } catch (Exception ex) {
+                return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJ)"));
+            }
+            if (deadline.isBefore(LocalDate.now())) {
+                return ResponseEntity.badRequest().body(Map.of("error", "L'échéance doit être dans le futur"));
+            }
         }
         double maxPoints = 20;
         if (body.get("maxPoints") != null) {
@@ -84,8 +100,9 @@ public class ExerciseController {
         }
 
         jdbcTemplate.update(
-                "INSERT INTO exercise (teacher_id, title, description, max_points, deadline) VALUES (?, ?, ?, ?, ?)",
-                teacherId, title, body.get("description"), maxPoints, java.sql.Date.valueOf(deadline));
+                "INSERT INTO exercise (teacher_id, title, description, max_points, deadline, duration_minutes) VALUES (?, ?, ?, ?, ?, ?)",
+                teacherId, title, body.get("description"), maxPoints,
+                deadline == null ? null : java.sql.Date.valueOf(deadline), durationMinutes);
         Long id = jdbcTemplate.queryForObject("SELECT max(id) FROM exercise", Long.class);
 
         Map<String, Object> result = new HashMap<>();
@@ -93,7 +110,52 @@ public class ExerciseController {
         result.put("title", title);
         result.put("maxPoints", maxPoints);
         result.put("deadline", deadline);
+        result.put("durationMinutes", durationMinutes);
         System.out.println("Nouvel exercice créé : " + title + " (id " + id + ")");
         return ResponseEntity.status(201).body(result);
+    }
+
+    @PostMapping("/exercises/{id}/start")
+    public ResponseEntity<?> start(@PathVariable long id, @RequestBody Map<String, Object> body) {
+        if (body.get("studentId") == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "studentId est obligatoire"));
+        }
+        long studentId = ((Number) body.get("studentId")).longValue();
+
+        List<Map<String, Object>> exercises = jdbcTemplate.queryForList("SELECT * FROM exercise WHERE id = ?", id);
+        if (exercises.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "Exercice introuvable"));
+        }
+        Object durationObj = exercises.get(0).get("duration_minutes");
+        if (durationObj == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Cet exercice n'est pas minuté"));
+        }
+        int duration = ((Number) durationObj).intValue();
+        Integer student = jdbcTemplate.queryForObject("SELECT count(*) FROM student WHERE id = ?", Integer.class, studentId);
+        if (student == null || student == 0) {
+            return ResponseEntity.status(404).body(Map.of("error", "Étudiant introuvable"));
+        }
+        Integer submitted = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM submission WHERE exercise_id = ? AND student_id = ?", Integer.class, id, studentId);
+        if (submitted != null && submitted > 0) {
+            return ResponseEntity.status(409).body(Map.of("error", "Cet étudiant a déjà soumis cet exercice"));
+        }
+
+        // a second call never resets the clock
+        jdbcTemplate.update(
+                "INSERT INTO exercise_start (exercise_id, student_id, started_at) VALUES (?, ?, ?) "
+                        + "ON CONFLICT (exercise_id, student_id) DO NOTHING",
+                id, studentId, Timestamp.valueOf(LocalDateTime.now()));
+        LocalDateTime startedAt = jdbcTemplate.queryForObject(
+                "SELECT started_at FROM exercise_start WHERE exercise_id = ? AND student_id = ?",
+                Timestamp.class, id, studentId).toLocalDateTime();
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("exerciseId", id);
+        result.put("studentId", studentId);
+        result.put("startedAt", startedAt);
+        result.put("durationMinutes", duration);
+        result.put("endsAt", startedAt.plusMinutes(duration));
+        return ResponseEntity.ok(result);
     }
 }
